@@ -1,6 +1,50 @@
-// ... (предыдущий код до Шага 4 остается без изменений) ...
+Office.onReady((info) => {
+    if (info.host === Office.HostType.Excel) {
+        document.getElementById("runBtn").onclick = runAI;
+    }
+});
 
-            // 4. Запрос к Gemini
+async function runAI() {
+    const prompt = document.getElementById("promptInput").value;
+    const apiKey = document.getElementById("apiKey").value;
+    const resultDiv = document.getElementById("result");
+
+    if (!apiKey) { 
+        resultDiv.innerText = "Пожалуйста, введите API ключ."; 
+        return; 
+    }
+    
+    // Если этот текст появится, значит кнопка работает!
+    resultDiv.innerText = "Сканирую структуру книги и отправляю данные...";
+
+    try {
+        await Excel.run(async (context) => {
+            // 1. Собираем имена листов
+            const sheets = context.workbook.worksheets;
+            sheets.load("items/name");
+            await context.sync();
+            const sheetNames = sheets.items.map(s => s.name).join(", ");
+
+            // 2. Пытаемся взять выделенные данные
+            let selectedData = "Данные не выделены";
+            try {
+                const range = context.workbook.getSelectedRange();
+                range.load("values");
+                await context.sync();
+                selectedData = JSON.stringify(range.values);
+            } catch (e) {
+                // Игнорируем ошибку, если ничего не выделено
+            }
+
+            // 3. Формируем инструкцию
+            const systemInstruction = `Ты умный ассистент для Excel. Текущие листы в книге: ${sheetNames}. 
+            Выделенные данные: ${selectedData}. 
+            Задача пользователя: ${prompt}. 
+            Если нужно выполнить действия (создать лист, записать данные), верни СТРОГО формат JSON без лишнего текста:
+            {"actions": [{"type": "addSheet", "name": "Имя_Листа"}, {"type": "writeValue", "sheet": "Имя_Листа", "address": "A1", "value": "Текст или число"}]}
+            Если это просто вопрос, ответь текстом.`;
+
+            // 4. Отправляем запрос (VPN должен быть включен в режиме TUN)
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -11,22 +55,18 @@
 
             const data = await response.json();
 
-            // === НОВАЯ ЛОГИКА ПРОВЕРКИ ОШИБОК ===
-            // Если Google вернул ошибку вместо данных
+            // Проверки на ошибки от Google
             if (data.error) {
-                throw new Error(`Google API: ${data.error.message}`);
+                throw new Error(`Ответ API: ${data.error.message}`);
             }
-            // Если ответ пустой (например, сработал фильтр безопасности)
             if (!data.candidates || data.candidates.length === 0) {
-                 throw new Error(`Google не вернул ответ. Возможно, сработал фильтр или проблема с сетью. Ответ сервера: ${JSON.stringify(data)}`);
+                 throw new Error(`Пустой ответ от сервера. Возможно, сработал фильтр. Ответ: ${JSON.stringify(data)}`);
             }
-            // ===================================
 
             const aiText = data.candidates[0].content.parts[0].text;
 
-            // 5. Исполнение команд
+            // 5. Выполняем команды
             try {
-                // Пытаемся очистить ответ от маркдауна и распарсить JSON
                 const cleanJson = aiText.replace(/```json/g, "").replace(/```/g, "").trim();
                 const command = JSON.parse(cleanJson);
 
@@ -48,12 +88,11 @@
                     resultDiv.innerText = "✅ Задача успешно выполнена!";
                 }
             } catch (e) {
-                // Если ИИ ответил просто текстом, выводим его
+                // Выводим просто текст, если ИИ не сгенерировал JSON
                 resultDiv.innerText = aiText;
             }
         });
     } catch (error) {
-        // Теперь панель покажет вам настоящую причину ошибки
         resultDiv.innerText = "❌ Ошибка: " + error.message;
     }
 }
