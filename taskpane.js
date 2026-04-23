@@ -47,23 +47,18 @@ async function runAI() {
             1. Используй только объект 'context'.
             2. Обязательно вызывай 'await context.sync()' после команд чтения (load) и перед чтением свойств.
             3. Если пользователь просит аналитику с других листов: сначала прочитай данные (load -> sync), сделай расчеты средствами JS, затем запиши результат на новый или текущий лист.
-            
-            Формат ответа СТРОГО JSON:
+            4. Верни СТРОГО формат JSON. Никакого маркдауна или пояснительного текста.
+
+            Формат ответа JSON:
             {"type": "code", "script": "const sheet = context.workbook.worksheets.getActiveWorksheet(); sheet.getRange('A1').values = [['Привет']];"}
             ИЛИ, если запрос не касается действий в Excel (просто вопрос):
             {"type": "message", "text": "Твой текстовый ответ"}`;
 
-            // 3. Отправляем запрос к Gemini (Ваш оригинальный URL)
+            // 3. Отправляем запрос к Gemini 2.5 Flash
             const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    contents: [{ parts: [{ text: systemInstruction }] }],
-                    // Добавленное улучшение: заставляем API вернуть чистый JSON
-                    generationConfig: { 
-                        responseMimeType: "application/json" 
-                    }
-                })
+                body: JSON.stringify({ contents: [{ parts: [{ text: systemInstruction }] }] })
             });
 
             const data = await response.json();
@@ -74,8 +69,8 @@ async function runAI() {
             
             // 4. Исполнение ответа
             try {
-                // Улучшение: парсим напрямую, так как API гарантирует валидный JSON без маркдауна
-                const aiResponse = JSON.parse(aiText);
+                const cleanJson = aiText.replace(/```json/gi, "").replace(/```javascript/gi, "").replace(/```/g, "").trim();
+                const aiResponse = JSON.parse(cleanJson);
 
                 if (aiResponse.type === "message") {
                     resultDiv.innerText = aiResponse.text;
