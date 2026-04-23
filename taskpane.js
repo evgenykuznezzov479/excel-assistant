@@ -9,87 +9,92 @@ async function runAI() {
     const apiKey = document.getElementById("apiKey").value;
     const resultDiv = document.getElementById("result");
 
-    if (!apiKey) { 
-        resultDiv.innerText = "Пожалуйста, введите API ключ."; 
-        return; 
-    }
+    if (!apiKey) { resultDiv.innerText = "Пожалуйста, введите API ключ."; return; }
+    if (!prompt) { resultDiv.innerText = "Пожалуйста, напишите задачу."; return; }
     
-    // Если этот текст появится, значит кнопка работает!
-    resultDiv.innerText = "Сканирую структуру книги и отправляю данные...";
+    resultDiv.innerText = "Думаю и пишу код...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Собираем имена листов
+            // 1. Собираем базовый контекст для ИИ
             const sheets = context.workbook.worksheets;
             sheets.load("items/name");
+            const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+            activeSheet.load("name");
             await context.sync();
             const sheetNames = sheets.items.map(s => s.name).join(", ");
 
-            // 2. Пытаемся взять выделенные данные
-            let selectedData = "Данные не выделены";
+            let selectedAddress = "Ничего не выделено";
             try {
                 const range = context.workbook.getSelectedRange();
-                range.load("values");
+                range.load("address");
                 await context.sync();
-                selectedData = JSON.stringify(range.values);
-            } catch (e) {
-                // Игнорируем ошибку, если ничего не выделено
-            }
+                selectedAddress = range.address;
+            } catch (e) {}
 
-            // 3. Формируем инструкцию
-            const systemInstruction = `Ты умный ассистент для Excel. Текущие листы в книге: ${sheetNames}. 
-            Выделенные данные: ${selectedData}. 
-            Задача пользователя: ${prompt}. 
-            Если нужно выполнить действия (создать лист, записать данные), верни СТРОГО формат JSON без лишнего текста:
-            {"actions": [{"type": "addSheet", "name": "Имя_Листа"}, {"type": "writeValue", "sheet": "Имя_Листа", "address": "A1", "value": "Текст или число"}]}
-            Если это просто вопрос, ответь текстом.`;
+            // 2. Системный промпт (Режим программиста)
+            const systemInstruction = `Ты Senior Разработчик Office.js (Excel JavaScript API). 
+            Твоя задача — переводить запросы пользователя в готовый, рабочий код на JavaScript, который будет выполнен внутри 'Excel.run(async (context) => { ... })'.
+            
+            Контекст книги пользователя:
+            - Существующие листы: ${sheetNames}
+            - Текущий активный лист: ${activeSheet.name}
+            - Выделенный диапазон: ${selectedAddress}
+            
+            Запрос пользователя: "${prompt}"
 
-            // 4. Отправляем запрос (VPN должен быть включен в режиме TUN)
+            ПРАВИЛА ГЕНЕРАЦИИ КОДА:
+            1. Используй только объект 'context'.
+            2. Обязательно вызывай 'await context.sync()' после команд чтения (load) и перед чтением свойств.
+            3. Если пользователь просит аналитику с других листов: сначала прочитай данные (load -> sync), сделай расчеты средствами JS, затем запиши результат на новый или текущий лист.
+            4. Верни СТРОГО формат JSON. Никакого маркдауна или пояснительного текста.
+
+            Формат ответа JSON:
+            {"type": "code", "script": "const sheet = context.workbook.worksheets.getActiveWorksheet(); sheet.getRange('A1').values = [['Привет']];"}
+            ИЛИ, если запрос не касается действий в Excel (просто вопрос):
+            {"type": "message", "text": "Твой текстовый ответ"}`;
+
+            // 3. Отправляем запрос к Gemini 2.5 Flash
             const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: systemInstruction }] }]
-                })
+                body: JSON.stringify({ contents: [{ parts: [{ text: systemInstruction }] }] })
             });
 
             const data = await response.json();
-
-            // Проверки на ошибки от Google
-            if (data.error) {
-                throw new Error(`Ответ API: ${data.error.message}`);
-            }
-            if (!data.candidates || data.candidates.length === 0) {
-                 throw new Error(`Пустой ответ от сервера. Возможно, сработал фильтр. Ответ: ${JSON.stringify(data)}`);
-            }
+            if (data.error) throw new Error(`API: ${data.error.message}`);
+            if (!data.candidates || data.candidates.length === 0) throw new Error("Пустой ответ от сервера.");
 
             const aiText = data.candidates[0].content.parts[0].text;
-
-            // 5. Выполняем команды
+            
+            // 4. Исполнение ответа
             try {
-                const cleanJson = aiText.replace(/```json/g, "").replace(/```/g, "").trim();
-                const command = JSON.parse(cleanJson);
+                const cleanJson = aiText.replace(/```json/gi, "").replace(/```javascript/gi, "").replace(/```/g, "").trim();
+                const aiResponse = JSON.parse(cleanJson);
 
-                if (command.actions) {
-                    resultDiv.innerText = "Применяю изменения...";
-                    for (let action of command.actions) {
-                        if (action.type === "addSheet") {
-                            const existingSheet = sheets.items.find(s => s.name === action.name);
-                            if (!existingSheet) {
-                                context.workbook.worksheets.add(action.name);
+                if (aiResponse.type === "message") {
+                    resultDiv.innerText = aiResponse.text;
+                } else if (aiResponse.type === "code") {
+                    resultDiv.innerText = "Выполняю скрипт в Excel...";
+                    
+                    // МАГИЯ: Динамическое выполнение кода, написанного нейросетью
+                    const executeCode = new Function("context", `
+                        return (async () => {
+                            try {
+                                ${aiResponse.script}
+                            } catch (err) {
+                                throw new Error("Ошибка в сгенерированном коде: " + err.message);
                             }
-                        }
-                        if (action.type === "writeValue") {
-                            const targetSheet = context.workbook.worksheets.getItem(action.sheet);
-                            targetSheet.getRange(action.address).values = [[action.value]];
-                        }
-                    }
+                        })();
+                    `);
+                    
+                    await executeCode(context);
                     await context.sync();
-                    resultDiv.innerText = "✅ Задача успешно выполнена!";
+                    resultDiv.innerText = "✅ Готово!";
                 }
             } catch (e) {
-                // Выводим просто текст, если ИИ не сгенерировал JSON
-                resultDiv.innerText = aiText;
+                // Если ИИ ошибся в синтаксисе JSON или кода
+                resultDiv.innerText = "Сбой при разборе ответа: " + e.message + "\n\nОтвет ИИ был: " + aiText;
             }
         });
     } catch (error) {
