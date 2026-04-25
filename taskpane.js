@@ -9,37 +9,38 @@ async function runAI() {
     const apiKey = document.getElementById("apiKey").value;
     const resultDiv = document.getElementById("result");
 
-    if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ AI TUNNEL."; return; }
-    
-    resultDiv.innerText = "Анализирую данные...";
+    if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ."; return; }
+    resultDiv.innerText = "Выполняю задачу...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Собираем контекст: читаем данные выделенного диапазона
+            // 1. Собираем контекст: читаем заголовки и данные
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
             const range = context.workbook.getSelectedRange();
             range.load("address, values");
-            const sheets = context.workbook.worksheets;
-            sheets.load("items/name");
+            sheet.load("name");
             await context.sync();
 
-            // 2. Системный промпт "Senior Data Analyst"
-            const systemInstruction = `Ты эксперт по анализу данных в Excel (Office.js).
-            Твоя задача: 
-            1. Если просят аналитику: прочитай данные из 'range.values', проведи расчеты (JS), создай новый лист и запиши туда сводную таблицу.
-            2. Если просят форматирование: используй 'range.format.fill.color'.
-            3. Если просят функции: используй 'range.formulas = [["=SUM(...)"]]'.
+            // 2. Системный промпт "Универсальный Инженер Excel"
+            const systemInstruction = `Ты Senior Developer надстроек Office.js. 
+            Твоя задача — выполнять любые действия в Excel по запросу пользователя.
+
+            ТВОИ ВОЗМОЖНОСТИ:
+            1. АНАЛИТИКА: Используй переданный массив данных (data), фильтруй его, считай наценки/суммы (JS), записывай результат на новый или существующий лист.
+            2. ФОРМАТИРОВАНИЕ: Меняй цвета (range.format.fill.color), шрифты, границы.
+            3. СТРУКТУРА: Создавай листы (context.workbook.worksheets.add), переименовывай их.
+            4. ФОРМУЛЫ: Вставляй формулы Excel (range.formulas = [["=SUM(...)"]]).
 
             Контекст:
-            - Выделенные данные: ${JSON.stringify(range.values)}
-            - Адрес диапазона: ${range.address}
-            - Существующие листы: ${sheets.items.map(s => s.name).join(", ")}
-
-            Правила:
-            - Всегда возвращай СТРОГО JSON: {"type": "code", "script": "ВАШ_КОД"}
-            - Для создания листа используй: const s = context.workbook.worksheets.add("Имя"); s.activate();
-            - НЕ пиши пояснительного текста, только JSON.
+            - Адрес выделения: ${range.address}
+            - Данные (первые 50 строк): ${JSON.stringify(range.values.slice(0, 50))}
             
-            Задача: ${prompt}`;
+            ПРАВИЛА:
+            - Не пиши пояснений. Верни СТРОГО JSON: {"type": "code", "script": "ВАШ_КОД"}.
+            - Всегда используй 'await context.sync()' в конце скрипта.
+            - Для фильтрации 5000+ строк используй методы JS (filter, map, reduce).
+
+            ЗАПРОС ПОЛЬЗОВАТЕЛЯ: ${prompt}`;
 
             // 3. Запрос к AI TUNNEL
             const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
@@ -51,18 +52,21 @@ async function runAI() {
                 })
             });
 
-            const data = await response.json();
-            const aiText = data.choices[0].message.content.replace(/```json/gi, "").replace(/```/g, "").trim();
+            const aiData = await response.json();
+            const aiText = aiData.choices[0].message.content.replace(/```json|```javascript|```/gi, "").trim();
             const aiResponse = JSON.parse(aiText);
 
-            // 4. Выполнение
+            // 4. Исполнение
             if (aiResponse.type === "code") {
-                const executeCode = new Function("context", `return (async () => { ${aiResponse.script} await context.sync(); })();`);
-                await executeCode(context);
-                resultDiv.innerText = "✅ Анализ завершен!";
+                const executeCode = new Function("context", "data", `return (async () => { ${aiResponse.script} await context.sync(); })();`);
+                await executeCode(context, range.values);
+                resultDiv.innerText = "✅ Выполнено!";
+            } else {
+                resultDiv.innerText = aiResponse.text || "Готово.";
             }
         });
     } catch (error) {
         resultDiv.innerText = "❌ Ошибка: " + error.message;
+        console.error(error);
     }
 }
