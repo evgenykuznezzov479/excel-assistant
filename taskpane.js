@@ -9,37 +9,33 @@ async function runAI() {
     const apiKey = document.getElementById("apiKey").value;
     const resultDiv = document.getElementById("result");
 
-    if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ."; return; }
-    resultDiv.innerText = "Анализирую таблицу...";
+    if (!apiKey) { resultDiv.innerText = "❌ Введите API ключ."; return; }
+    resultDiv.innerText = "⏳ Анализирую таблицу...";
 
     try {
         await Excel.run(async (context) => {
-            const range = context.workbook.getSelectedRange();
-            range.load("address, values");
+            // 1. Берем используемый диапазон (автоматически находит всю таблицу)
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            const range = sheet.getUsedRange();
+            range.load("values, address");
             await context.sync();
 
             const data = range.values;
-            // Передаем в ИИ всю таблицу, чтобы он сам понял структуру
-            const tableSummary = JSON.stringify(data.slice(0, 10)); 
 
-            const systemInstruction = `Ты — универсальный инженер данных Excel.
-            Задача пользователя: "${prompt}"
+            // 2. Системная инструкция для ИИ
+            const systemInstruction = `Ты — эксперт Office.js. Твоя задача — написать JS-код для решения задачи.
+            ЗАДАЧА: "${prompt}"
+            ДАННЫЕ ТАБЛИЦЫ (первые 10 строк): ${JSON.stringify(data.slice(0, 10))}
             
-            СТРУКТУРА ТАБЛИЦЫ (Заголовки и данные):
-            ${tableSummary}
+            ПРАВИЛА ДЛЯ КОДА:
+            - Используй ПЕРЕДАННЫЙ массив 'data' (это все данные таблицы).
+            - Для поиска столбцов (Цена, Номенклатура и т.д.) сначала найди строку с заголовками в массиве 'data'.
+            - ВМЕСТО range.rowCount используй data.length.
+            - Для создания листа: const newSheet = context.workbook.worksheets.add("Результат_" + Date.now().toString().slice(-4));
+            - Для записи данных: newSheet.getRange("A1:C10").values = [массив]; (указывай размер правильно).
+            - ОБЯЗАТЕЛЬНО в конце: await context.sync();
             
-            ТВОЙ АЛГОРИТМ:
-            1. Проанализируй заголовки (строка 0).
-            2. Найди индексы столбцов, которые семантически соответствуют запросу пользователя. 
-               - Например: "Цена" может называться "Стоимость", "Price", "Amount".
-               - "Товар" может быть "Номенклатура", "Название", "Item".
-            3. Если не уверен в заголовке — проанализируй типы данных в колонках (где числа, где текст).
-            4. Сгенерируй JavaScript-код, который использует динамические переменные для индексов найденных столбцов.
-            
-            Верни СТРОГО JSON: {"type": "code", "script": "ТВОЙ_JS_КОД"}
-            - Используй 'data' для работы.
-            - Обязательно в конце: await context.sync();
-            - НЕ пиши пояснений.`;
+            Верни СТРОГО JSON: {"type": "code", "script": "..."}`;
 
             const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
                 method: "POST",
@@ -51,16 +47,29 @@ async function runAI() {
             });
 
             const aiData = await response.json();
-            const aiText = aiData.choices[0].message.content.replace(/```json|```|```javascript/gi, "").trim();
-            const aiResponse = JSON.parse(aiText);
+            const aiResponse = JSON.parse(aiData.choices[0].message.content.replace(/```json|```|```javascript/gi, "").trim());
 
             if (aiResponse.type === "code") {
-                const executeCode = new Function("context", "data", `return (async () => { ${aiResponse.script} })();`);
+                resultDiv.innerText = "🚀 Выполняю...";
+                
+                // Передаем данные напрямую в функцию, чтобы избежать проблем с .load()
+                const executeCode = new Function("context", "data", `
+                    return (async () => {
+                        try {
+                            ${aiResponse.script}
+                            await context.sync();
+                        } catch (e) {
+                            throw new Error("Ошибка в коде Excel: " + e.message);
+                        }
+                    })();
+                `);
+
                 await executeCode(context, data);
-                resultDiv.innerText = "✅ Выполнено!";
+                resultDiv.innerText = "✅ Готово!";
             }
         });
     } catch (error) {
         resultDiv.innerText = "❌ Ошибка: " + error.message;
+        console.error(error);
     }
 }
