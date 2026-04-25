@@ -10,54 +10,59 @@ async function runAI() {
     const resultDiv = document.getElementById("result");
 
     if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ AI TUNNEL."; return; }
-    if (!prompt) { resultDiv.innerText = "Ошибка: Напишите задачу."; return; }
     
-    resultDiv.innerText = "Отправляю запрос...";
+    resultDiv.innerText = "Анализирую данные...";
 
     try {
-        // 1. Формируем системный промпт (как у вас было)
-        // ВАЖНО: Мы не вызываем Excel.run СРАЗУ, чтобы сначала дождаться ответа от ИИ
-        
-        const systemInstruction = `Ты Senior Разработчик Office.js. Верни СТРОГО JSON: {"type": "code", "script": "..."} или {"type": "message", "text": "..."}. Запрос: ${prompt}`;
-
-        // 2. Запрос к AI TUNNEL
-        const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
-            method: "POST",
-            headers: { 
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}` 
-            },
-            body: JSON.stringify({ 
-                model: "gemini-2.5-flash",
-                messages: [{ role: "user", content: systemInstruction }] 
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Ошибка сервера: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const aiText = data.choices[0].message.content;
-        resultDiv.innerText = "Получил код от ИИ, выполняю...";
-
-        // 3. Выполнение в Excel
         await Excel.run(async (context) => {
-            const cleanJson = aiText.replace(/```json/gi, "").replace(/```javascript/gi, "").replace(/```/g, "").trim();
-            const aiResponse = JSON.parse(cleanJson);
+            // 1. Собираем контекст: читаем данные выделенного диапазона
+            const range = context.workbook.getSelectedRange();
+            range.load("address, values");
+            const sheets = context.workbook.worksheets;
+            sheets.load("items/name");
+            await context.sync();
 
-            if (aiResponse.type === "message") {
-                resultDiv.innerText = aiResponse.text;
-            } else {
-                const executeCode = new Function("context", `return (async () => { ${aiResponse.script} })();`);
+            // 2. Системный промпт "Senior Data Analyst"
+            const systemInstruction = `Ты эксперт по анализу данных в Excel (Office.js).
+            Твоя задача: 
+            1. Если просят аналитику: прочитай данные из 'range.values', проведи расчеты (JS), создай новый лист и запиши туда сводную таблицу.
+            2. Если просят форматирование: используй 'range.format.fill.color'.
+            3. Если просят функции: используй 'range.formulas = [["=SUM(...)"]]'.
+
+            Контекст:
+            - Выделенные данные: ${JSON.stringify(range.values)}
+            - Адрес диапазона: ${range.address}
+            - Существующие листы: ${sheets.items.map(s => s.name).join(", ")}
+
+            Правила:
+            - Всегда возвращай СТРОГО JSON: {"type": "code", "script": "ВАШ_КОД"}
+            - Для создания листа используй: const s = context.workbook.worksheets.add("Имя"); s.activate();
+            - НЕ пиши пояснительного текста, только JSON.
+            
+            Задача: ${prompt}`;
+
+            // 3. Запрос к AI TUNNEL
+            const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+                body: JSON.stringify({ 
+                    model: "gemini-2.5-flash",
+                    messages: [{ role: "user", content: systemInstruction }] 
+                })
+            });
+
+            const data = await response.json();
+            const aiText = data.choices[0].message.content.replace(/```json/gi, "").replace(/```/g, "").trim();
+            const aiResponse = JSON.parse(aiText);
+
+            // 4. Выполнение
+            if (aiResponse.type === "code") {
+                const executeCode = new Function("context", `return (async () => { ${aiResponse.script} await context.sync(); })();`);
                 await executeCode(context);
-                await context.sync();
-                resultDiv.innerText = "✅ Готово!";
+                resultDiv.innerText = "✅ Анализ завершен!";
             }
         });
-
     } catch (error) {
-        console.error(error);
         resultDiv.innerText = "❌ Ошибка: " + error.message;
     }
 }
