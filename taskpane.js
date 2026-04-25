@@ -10,35 +10,39 @@ async function runAI() {
     const resultDiv = document.getElementById("result");
 
     if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ."; return; }
-    resultDiv.innerText = "Анализирую и выполняю...";
+    resultDiv.innerText = "ИИ анализирует структуру таблицы...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Получаем выделенный диапазон
+            // 1. Читаем всё выделение вместе с заголовками
             const range = context.workbook.getSelectedRange();
             range.load("address, values");
             await context.sync();
 
-            const data = range.values;
+            const allData = range.values;
+            const headers = allData[0]; // Первая строка - это заголовки
 
-            // 2. Системный промпт (Универсальный)
-            const systemInstruction = `Ты — Senior Developer надстроек Office.js.
+            // 2. Системный промпт "Универсальный аналитик"
+            const systemInstruction = `Ты — эксперт по автоматизации Excel.
             Задача пользователя: "${prompt}"
-            Текущие данные (первые 5 строк для структуры): ${JSON.stringify(data.slice(0, 5))}
             
-            Твоя задача — вернуть СТРОГО JSON: {"type": "code", "script": "ТВОЙ_JS_КОД"}
+            СТРУКТУРА ТАБЛИЦЫ:
+            Заголовки столбцов: ${JSON.stringify(headers)}
+            Данные (первые 5 строк): ${JSON.stringify(allData.slice(1, 6))}
             
-            ИНСТРУКЦИИ ДЛЯ КОДА:
-            - Если нужно создать лист: context.workbook.worksheets.add("Имя").
-            - Если нужно фильтровать 5000+ строк: используй JS-фильтрацию (data.filter), а не формулы Excel.
-            - Если нужно записать данные: sheet.getRange("A1").values = [массив_данных].
-            - Если нужно форматирование: range.format.fill.color = "#ЦВЕТ".
-            - ВАЖНО: Весь код должен быть внутри await Excel.run, но НЕ пиши 'await Excel.run' внутри скрипта.
-            - Обязательно в конце кода: await context.sync();
-            - Никаких markdown-тегов (```json), только чистый JSON.`;
+            Твои правила:
+            1. ПЕРВЫМ ДЕЛОМ определи индексы столбцов для "Название" (или номенклатура) и "Цена" (или стоимость) по заголовкам.
+            2. Если нужно создать отчет: создай новый лист (context.workbook.worksheets.add), и запиши туда результат.
+            3. Если нужна аналитика (средние, суммы): делай расчеты в JS на массиве данных.
+            4. Если нужна фильтрация: делай ее в JS, учитывая найденные индексы столбцов.
+            5. Для наценки: умножай найденное значение цены на 1.5.
+            
+            Верни СТРОГО JSON: {"type": "code", "script": "ТВОЙ_JS_КОД"}
+            В коде используй переменную 'data' (это весь диапазон). 
+            ОБЯЗАТЕЛЬНО закончи код: await context.sync();`;
 
             // 3. Запрос к AI TUNNEL
-            const response = await fetch("[https://api.aitunnel.ru/v1/chat/completions](https://api.aitunnel.ru/v1/chat/completions)", {
+            const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
                 body: JSON.stringify({ 
@@ -53,21 +57,18 @@ async function runAI() {
 
             // 4. Исполнение
             if (aiResponse.type === "code") {
-                // Выполняем код, присланный ИИ
+                resultDiv.innerText = "Применяю логику...";
                 const executeCode = new Function("context", "data", `
                     return (async () => {
                         try {
                             ${aiResponse.script}
-                        } catch (err) {
-                            throw new Error("Ошибка в скрипте: " + err.message);
+                        } catch (e) {
+                            throw new Error("Ошибка в скрипте: " + e.message);
                         }
                     })();
                 `);
-                
-                await executeCode(context, data);
-                resultDiv.innerText = "✅ Выполнено!";
-            } else {
-                resultDiv.innerText = aiResponse.text || "Готово.";
+                await executeCode(context, allData);
+                resultDiv.innerText = "✅ Готово!";
             }
         });
     } catch (error) {
