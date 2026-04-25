@@ -1,9 +1,3 @@
-Office.onReady((info) => {
-    if (info.host === Office.HostType.Excel) {
-        document.getElementById("runBtn").onclick = runAI;
-    }
-});
-
 async function runAI() {
     const prompt = document.getElementById("promptInput").value;
     const apiKey = document.getElementById("apiKey").value;
@@ -16,7 +10,7 @@ async function runAI() {
 
     try {
         await Excel.run(async (context) => {
-            // 1. Собираем базовый контекст для ИИ
+            // 1. Собираем базовый контекст
             const sheets = context.workbook.worksheets;
             sheets.load("items/name");
             const activeSheet = context.workbook.worksheets.getActiveWorksheet();
@@ -32,7 +26,7 @@ async function runAI() {
                 selectedAddress = range.address;
             } catch (e) {}
 
-            // 2. Системный промпт (Режим программиста)
+            // 2. Системный промпт
             const systemInstruction = `Ты Senior Разработчик Office.js (Excel JavaScript API). 
             Твоя задача — переводить запросы пользователя в готовый, рабочий код на JavaScript, который будет выполнен внутри 'Excel.run(async (context) => { ... })'.
             
@@ -46,26 +40,35 @@ async function runAI() {
             ПРАВИЛА ГЕНЕРАЦИИ КОДА:
             1. Используй только объект 'context'.
             2. Обязательно вызывай 'await context.sync()' после команд чтения (load) и перед чтением свойств.
-            3. Если пользователь просит аналитику с других листов: сначала прочитай данные (load -> sync), сделай расчеты средствами JS, затем запиши результат на новый или текущий лист.
+            3. Если пользователь просит аналитику с других листов: сначала прочитай данные (load -> sync), сделай расчеты средствами JS, затем запиши результат.
             4. Верни СТРОГО формат JSON. Никакого маркдауна или пояснительного текста.
 
             Формат ответа JSON:
             {"type": "code", "script": "const sheet = context.workbook.worksheets.getActiveWorksheet(); sheet.getRange('A1').values = [['Привет']];"}
-            ИЛИ, если запрос не касается действий в Excel (просто вопрос):
+            ИЛИ
             {"type": "message", "text": "Твой текстовый ответ"}`;
 
-            // 3. Отправляем запрос к Gemini 2.5 Flash
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+            // 3. Отправляем запрос к AI TUNNEL (OpenAI-compatible)
+            const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ contents: [{ parts: [{ text: systemInstruction }] }] })
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}` 
+                },
+                body: JSON.stringify({ 
+                    model: "gemini-2.5-flash",
+                    messages: [{ role: "user", content: systemInstruction }] 
+                })
             });
 
             const data = await response.json();
-            if (data.error) throw new Error(`API: ${data.error.message}`);
-            if (!data.candidates || data.candidates.length === 0) throw new Error("Пустой ответ от сервера.");
+            
+            // Обработка ошибок API
+            if (data.error) throw new Error(`API Error: ${data.error.message}`);
+            if (!data.choices || data.choices.length === 0) throw new Error("Пустой ответ от сервера.");
 
-            const aiText = data.candidates[0].content.parts[0].text;
+            // Извлечение текста из ответа в формате OpenAI
+            const aiText = data.choices[0].message.content;
             
             // 4. Исполнение ответа
             try {
@@ -77,7 +80,6 @@ async function runAI() {
                 } else if (aiResponse.type === "code") {
                     resultDiv.innerText = "Выполняю скрипт в Excel...";
                     
-                    // МАГИЯ: Динамическое выполнение кода, написанного нейросетью
                     const executeCode = new Function("context", `
                         return (async () => {
                             try {
@@ -93,7 +95,6 @@ async function runAI() {
                     resultDiv.innerText = "✅ Готово!";
                 }
             } catch (e) {
-                // Если ИИ ошибся в синтаксисе JSON или кода
                 resultDiv.innerText = "Сбой при разборе ответа: " + e.message + "\n\nОтвет ИИ был: " + aiText;
             }
         });
