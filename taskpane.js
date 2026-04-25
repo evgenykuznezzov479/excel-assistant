@@ -10,65 +10,61 @@ async function runAI() {
     const resultDiv = document.getElementById("result");
 
     if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ."; return; }
-    if (!prompt) { resultDiv.innerText = "Ошибка: Напишите задачу."; return; }
-    
-    resultDiv.innerText = "Выполняю задачу...";
+    resultDiv.innerText = "Анализирую и выполняю...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Получаем данные выделения
+            // 1. Получаем выделенный диапазон
             const range = context.workbook.getSelectedRange();
             range.load("address, values");
-            const sheets = context.workbook.worksheets;
-            sheets.load("items/name");
             await context.sync();
 
-            // 2. Системный промпт
+            const data = range.values;
+
+            // 2. Системный промпт (Универсальный)
             const systemInstruction = `Ты — Senior Developer надстроек Office.js.
             Задача пользователя: "${prompt}"
-            Данные выделения: ${JSON.stringify(range.values)}
+            Текущие данные (первые 5 строк для структуры): ${JSON.stringify(data.slice(0, 5))}
             
             Твоя задача — вернуть СТРОГО JSON: {"type": "code", "script": "ТВОЙ_JS_КОД"}
             
-            ВАЖНЫЕ ПРАВИЛА:
-            - Используй context.workbook.worksheets.add("Имя") для создания листа.
-            - Используй range.format.fill.color для цвета.
-            - Для наценки 50% и фильтрации: пиши JS-код, который берет массив 'data', делает filter/map и записывает результат через sheet.getRange().values = ...
-            - Код должен заканчиваться действием (запись данных или форматирование).
-            - Никаких пояснений, только JSON.`;
+            ИНСТРУКЦИИ ДЛЯ КОДА:
+            - Если нужно создать лист: context.workbook.worksheets.add("Имя").
+            - Если нужно фильтровать 5000+ строк: используй JS-фильтрацию (data.filter), а не формулы Excel.
+            - Если нужно записать данные: sheet.getRange("A1").values = [массив_данных].
+            - Если нужно форматирование: range.format.fill.color = "#ЦВЕТ".
+            - ВАЖНО: Весь код должен быть внутри await Excel.run, но НЕ пиши 'await Excel.run' внутри скрипта.
+            - Обязательно в конце кода: await context.sync();
+            - Никаких markdown-тегов (```json), только чистый JSON.`;
 
             // 3. Запрос к AI TUNNEL
-            const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
+            const response = await fetch("[https://api.aitunnel.ru/v1/chat/completions](https://api.aitunnel.ru/v1/chat/completions)", {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json", 
-                    "Authorization": `Bearer ${apiKey}` 
-                },
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
                 body: JSON.stringify({ 
                     model: "gemini-2.5-flash",
                     messages: [{ role: "user", content: systemInstruction }] 
                 })
             });
 
-            const data = await response.json();
-            if (!data.choices || !data.choices[0]) throw new Error("Нет ответа от ИИ.");
-            
-            const aiText = data.choices[0].message.content.replace(/```json|```javascript|```/gi, "").trim();
+            const aiData = await response.json();
+            const aiText = aiData.choices[0].message.content.replace(/```json|```javascript|```/gi, "").trim();
             const aiResponse = JSON.parse(aiText);
 
-            // 4. Исполнение кода
+            // 4. Исполнение
             if (aiResponse.type === "code") {
-                // Создаем функцию, принудительно делающую sync в конце
+                // Выполняем код, присланный ИИ
                 const executeCode = new Function("context", "data", `
                     return (async () => {
-                        console.log("Начало выполнения скрипта ИИ");
-                        ${aiResponse.script}
-                        await context.sync();
-                        console.log("Скрипт успешно завершен и синхронизирован");
+                        try {
+                            ${aiResponse.script}
+                        } catch (err) {
+                            throw new Error("Ошибка в скрипте: " + err.message);
+                        }
                     })();
                 `);
-
-                await executeCode(context, range.values);
+                
+                await executeCode(context, data);
                 resultDiv.innerText = "✅ Выполнено!";
             } else {
                 resultDiv.innerText = aiResponse.text || "Готово.";
