@@ -10,38 +10,37 @@ async function runAI() {
     const resultDiv = document.getElementById("result");
 
     if (!apiKey) { resultDiv.innerText = "Ошибка: Введите API ключ."; return; }
-    resultDiv.innerText = "ИИ анализирует структуру таблицы...";
+    resultDiv.innerText = "Анализирую таблицу...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Читаем всё выделение вместе с заголовками
             const range = context.workbook.getSelectedRange();
             range.load("address, values");
             await context.sync();
 
-            const allData = range.values;
-            const headers = allData[0]; // Первая строка - это заголовки
+            const data = range.values;
+            // Передаем в ИИ всю таблицу, чтобы он сам понял структуру
+            const tableSummary = JSON.stringify(data.slice(0, 10)); 
 
-            // 2. Системный промпт "Универсальный аналитик"
-            const systemInstruction = `Ты — эксперт по автоматизации Excel.
+            const systemInstruction = `Ты — универсальный инженер данных Excel.
             Задача пользователя: "${prompt}"
             
-            СТРУКТУРА ТАБЛИЦЫ:
-            Заголовки столбцов: ${JSON.stringify(headers)}
-            Данные (первые 5 строк): ${JSON.stringify(allData.slice(1, 6))}
+            СТРУКТУРА ТАБЛИЦЫ (Заголовки и данные):
+            ${tableSummary}
             
-            Твои правила:
-            1. ПЕРВЫМ ДЕЛОМ определи индексы столбцов для "Название" (или номенклатура) и "Цена" (или стоимость) по заголовкам.
-            2. Если нужно создать отчет: создай новый лист (context.workbook.worksheets.add), и запиши туда результат.
-            3. Если нужна аналитика (средние, суммы): делай расчеты в JS на массиве данных.
-            4. Если нужна фильтрация: делай ее в JS, учитывая найденные индексы столбцов.
-            5. Для наценки: умножай найденное значение цены на 1.5.
+            ТВОЙ АЛГОРИТМ:
+            1. Проанализируй заголовки (строка 0).
+            2. Найди индексы столбцов, которые семантически соответствуют запросу пользователя. 
+               - Например: "Цена" может называться "Стоимость", "Price", "Amount".
+               - "Товар" может быть "Номенклатура", "Название", "Item".
+            3. Если не уверен в заголовке — проанализируй типы данных в колонках (где числа, где текст).
+            4. Сгенерируй JavaScript-код, который использует динамические переменные для индексов найденных столбцов.
             
             Верни СТРОГО JSON: {"type": "code", "script": "ТВОЙ_JS_КОД"}
-            В коде используй переменную 'data' (это весь диапазон). 
-            ОБЯЗАТЕЛЬНО закончи код: await context.sync();`;
+            - Используй 'data' для работы.
+            - Обязательно в конце: await context.sync();
+            - НЕ пиши пояснений.`;
 
-            // 3. Запрос к AI TUNNEL
             const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -52,27 +51,16 @@ async function runAI() {
             });
 
             const aiData = await response.json();
-            const aiText = aiData.choices[0].message.content.replace(/```json|```javascript|```/gi, "").trim();
+            const aiText = aiData.choices[0].message.content.replace(/```json|```|```javascript/gi, "").trim();
             const aiResponse = JSON.parse(aiText);
 
-            // 4. Исполнение
             if (aiResponse.type === "code") {
-                resultDiv.innerText = "Применяю логику...";
-                const executeCode = new Function("context", "data", `
-                    return (async () => {
-                        try {
-                            ${aiResponse.script}
-                        } catch (e) {
-                            throw new Error("Ошибка в скрипте: " + e.message);
-                        }
-                    })();
-                `);
-                await executeCode(context, allData);
-                resultDiv.innerText = "✅ Готово!";
+                const executeCode = new Function("context", "data", `return (async () => { ${aiResponse.script} })();`);
+                await executeCode(context, data);
+                resultDiv.innerText = "✅ Выполнено!";
             }
         });
     } catch (error) {
         resultDiv.innerText = "❌ Ошибка: " + error.message;
-        console.error("DEBUG:", error);
     }
 }
