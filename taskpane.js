@@ -29,11 +29,6 @@ async function runAI() {
                 })
             });
 
-            // Если сервер выдаст ошибку Nginx (HTML), этот блок поможет её поймать
-            if (!response.ok) {
-                throw new Error("Сервер ответил ошибкой " + response.status);
-            }
-
             const reply = await response.json();
 
             if (reply.status === "success") {
