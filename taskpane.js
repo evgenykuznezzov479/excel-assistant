@@ -6,70 +6,46 @@ Office.onReady((info) => {
 
 async function runAI() {
     const prompt = document.getElementById("promptInput").value;
-    const apiKey = document.getElementById("apiKey").value;
     const resultDiv = document.getElementById("result");
 
-    if (!apiKey) { resultDiv.innerText = "❌ Введите API ключ."; return; }
-    resultDiv.innerText = "⏳ Анализирую таблицу...";
+    if (!prompt) { resultDiv.innerText = "❌ Напишите задачу!"; return; }
+    resultDiv.innerText = "🚀 Отправляю данные на сервер...";
 
     try {
         await Excel.run(async (context) => {
-            // 1. Берем используемый диапазон (автоматически находит всю таблицу)
+            // 1. Берем всю таблицу с текущего листа
             const sheet = context.workbook.worksheets.getActiveWorksheet();
             const range = sheet.getUsedRange();
-            range.load("values, address");
+            range.load("values");
             await context.sync();
 
             const data = range.values;
 
-            // 2. Системная инструкция для ИИ
-            const systemInstruction = `Ты — эксперт Office.js. Твоя задача — написать JS-код для решения задачи.
-            ЗАДАЧА: "${prompt}"
-            ДАННЫЕ ТАБЛИЦЫ (первые 10 строк): ${JSON.stringify(data.slice(0, 10))}
-            
-            ПРАВИЛА ДЛЯ КОДА:
-            - Используй ПЕРЕДАННЫЙ массив 'data' (это все данные таблицы).
-            - Для поиска столбцов (Цена, Номенклатура и т.д.) сначала найди строку с заголовками в массиве 'data'.
-            - ВМЕСТО range.rowCount используй data.length.
-            - Для создания листа: const newSheet = context.workbook.worksheets.add("Результат_" + Date.now().toString().slice(-4));
-            - Для записи данных: newSheet.getRange("A1:C10").values = [массив]; (указывай размер правильно).
-            - ОБЯЗАТЕЛЬНО в конце: await context.sync();
-            
-            Верни СТРОГО JSON: {"type": "code", "script": "..."}`;
-
-            const response = await fetch("https://api.aitunnel.ru/v1/chat/completions", {
+            // 2. Отправляем данные на ВАШ Python-сервер через ngrok
+            // ВАЖНО: Убедитесь, что /api/analyze есть в конце ссылки!
+            const response = await fetch("https://rebuilt-nutmeg-breeches.ngrok-free.dev/api/analyze", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+                headers: { 
+                    "Content-Type": "application/json" 
+                },
                 body: JSON.stringify({ 
-                    model: "gemini-2.5-flash",
-                    messages: [{ role: "user", content: systemInstruction }] 
+                    prompt: prompt, 
+                    data: data 
                 })
             });
 
-            const aiData = await response.json();
-            const aiResponse = JSON.parse(aiData.choices[0].message.content.replace(/```json|```|```javascript/gi, "").trim());
+            // 3. Получаем ответ от сервера
+            const serverReply = await response.json();
 
-            if (aiResponse.type === "code") {
-                resultDiv.innerText = "🚀 Выполняю...";
-                
-                // Передаем данные напрямую в функцию, чтобы избежать проблем с .load()
-                const executeCode = new Function("context", "data", `
-                    return (async () => {
-                        try {
-                            ${aiResponse.script}
-                            await context.sync();
-                        } catch (e) {
-                            throw new Error("Ошибка в коде Excel: " + e.message);
-                        }
-                    })();
-                `);
-
-                await executeCode(context, data);
-                resultDiv.innerText = "✅ Готово!";
+            // 4. Выводим результат в панель
+            if (serverReply.status === "success") {
+                resultDiv.innerText = "✅ Ответ сервера: " + serverReply.message;
+            } else {
+                resultDiv.innerText = "⚠️ Ошибка сервера: " + JSON.stringify(serverReply);
             }
         });
     } catch (error) {
-        resultDiv.innerText = "❌ Ошибка: " + error.message;
+        resultDiv.innerText = "❌ Ошибка Excel: " + error.message;
         console.error(error);
     }
 }
