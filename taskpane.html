@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>AI Assistant Pro</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; background-color: #f9f9fb; color: #333; margin: 0; }
+        .header { text-align: center; margin-bottom: 25px; }
+        .header h1 { font-size: 18px; color: #2b3a67; margin: 0; }
+        .header p { font-size: 12px; color: #888; }
+        
+        .card { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        label { font-size: 11px; font-weight: bold; text-transform: uppercase; color: #555; display: block; margin-bottom: 8px; }
+        
+        input, textarea { width: 100%; border: 1px solid #e1e1e1; border-radius: 6px; padding: 10px; box-sizing: border-box; font-size: 14px; outline: none; transition: border 0.3s; }
+        input:focus, textarea:focus { border-color: #4e73df; }
+        
+        button { width: 100%; background: #4e73df; color: white; border: none; padding: 12px; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; transition: background 0.3s; margin-top: 10px; }
+        button:hover { background: #2e59d9; }
+        
+        #result { margin-top: 15px; padding: 12px; border-radius: 6px; font-size: 13px; line-height: 1.5; min-height: 40px; }
+        .status-loading { color: #4e73df; font-weight: 500; animation: pulse 1.5s infinite; }
+        .status-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .status-error { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+
+        @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>AI Assistant Pro</h1>
+        <p>ИП Посаднев — Аналитика нового поколения</p>
+    </div>
+
+    <div class="card">
+        <label>🔑 Лицензионный ключ</label>
+        <input type="text" id="licenseKey" placeholder="Введите ваш ключ...">
+    </div>
+
+    <div class="card">
+        <label>📝 Задача для ИИ</label>
+        <textarea id="promptInput" rows="4" placeholder="Например: Сделай наценку 15% на товары бренда Elanco и выведи итог..."></textarea>
+        <button id="runBtn">ЗАПУСТИТЬ АНАЛИЗ</button>
+    </div>
+
+    <div id="result"></div>
+
+    <script src="taskpane.js"></script>
+</body>
+</html>
