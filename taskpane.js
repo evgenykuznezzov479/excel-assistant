@@ -20,7 +20,7 @@ async function runAI() {
             range.load("values");
             await context.sync();
 
-            const response = await fetch("https://excel-ai-pro.ru/api/analyze", {
+            const response = await fetch("[https://excel-ai-pro.ru/api/analyze](https://excel-ai-pro.ru/api/analyze)", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -33,7 +33,7 @@ async function runAI() {
             const reply = await response.json();
             if (reply.status !== "success") throw new Error(reply.message);
 
-            // 1. ПРИМЕНЯЕМ ОФОРМЛЕНИЕ (ACTIONS)
+            // 1. ПРИМЕНЯЕМ КОМАНДЫ (ACTIONS)
             for (const action of reply.actions) {
                 if (action.type === "add_sheet") {
                     sheet = workbook.worksheets.add(action.name);
@@ -49,11 +49,12 @@ async function runAI() {
                 }
                 if (action.type === "chart") {
                     let source = sheet.getRange(action.source);
-                    sheet.charts.add(action.chart_type, source, "Auto").title.text = action.title;
+                    let chart = sheet.charts.add(action.chart_type, source, "Auto");
+                    chart.title.text = action.title;
                 }
             }
 
-            // 2. ВСТАВЛЯЕМ ДАННЫЕ
+            // 2. ВСТАВЛЯЕМ ДАННЫЕ (Если ИИ их изменил)
             if (reply.new_data && reply.new_data.length > 0) {
                 const targetRange = sheet.getRange("A1").getResizedRange(
                     reply.new_data.length - 1, 
