@@ -10,17 +10,16 @@ async function runAI() {
     const resultDiv = document.getElementById("result");
 
     resultDiv.className = "status-loading";
-    resultDiv.innerText = "⏳ ИИ планирует задачи...";
+    resultDiv.innerText = "⏳ Обработка...";
 
     try {
         await Excel.run(async (context) => {
-            const workbook = context.workbook;
-            let sheet = workbook.worksheets.getActiveWorksheet();
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
             const range = sheet.getUsedRange();
             range.load("values");
             await context.sync();
 
-            const response = await fetch("[https://excel-ai-pro.ru/api/analyze](https://excel-ai-pro.ru/api/analyze)", {
+            const response = await fetch("https://excel-ai-pro.ru/api/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -30,46 +29,33 @@ async function runAI() {
                 })
             });
 
-            const reply = await response.json();
-            if (reply.status !== "success") throw new Error(reply.message);
-
-            // 1. ПРИМЕНЯЕМ КОМАНДЫ (ACTIONS)
-            for (const action of reply.actions) {
-                if (action.type === "add_sheet") {
-                    sheet = workbook.worksheets.add(action.name);
-                }
-                if (action.type === "rename") {
-                    sheet.name = action.new_name;
-                }
-                if (action.type === "format") {
-                    let target = sheet.getRange(action.range);
-                    if (action.bold) target.format.font.bold = true;
-                    if (action.bg) target.format.fill.color = action.bg;
-                    if (action.color) target.format.font.color = action.color;
-                }
-                if (action.type === "chart") {
-                    let source = sheet.getRange(action.source);
-                    let chart = sheet.charts.add(action.chart_type, source, "Auto");
-                    chart.title.text = action.title;
-                }
+            // Если сервер выдаст ошибку Nginx (HTML), этот блок поможет её поймать
+            if (!response.ok) {
+                throw new Error("Сервер ответил ошибкой " + response.status);
             }
 
-            // 2. ВСТАВЛЯЕМ ДАННЫЕ (Если ИИ их изменил)
-            if (reply.new_data && reply.new_data.length > 0) {
-                const targetRange = sheet.getRange("A1").getResizedRange(
+            const reply = await response.json();
+
+            if (reply.status === "success") {
+                const newSheet = context.workbook.worksheets.add("Результат ИИ");
+                const targetRange = newSheet.getRange("A1").getResizedRange(
                     reply.new_data.length - 1, 
                     reply.new_data[0].length - 1
                 );
                 targetRange.values = reply.new_data;
                 targetRange.format.autofitColumns();
+                newSheet.activate();
+                
+                resultDiv.className = "status-success";
+                resultDiv.innerText = "✅ " + reply.message;
+            } else {
+                resultDiv.className = "status-error";
+                resultDiv.innerText = "⚠️ " + reply.message;
             }
-
             await context.sync();
-            resultDiv.className = "status-success";
-            resultDiv.innerText = "✅ " + reply.message;
         });
-    } catch (e) {
+    } catch (error) {
         resultDiv.className = "status-error";
-        resultDiv.innerText = "❌ Ошибка: " + e.message;
+        resultDiv.innerText = "❌ Ошибка: " + error.message;
     }
 }
