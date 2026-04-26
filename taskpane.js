@@ -1,10 +1,5 @@
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
-        // Загружаем ключ из памяти
-        const savedKey = localStorage.getItem("ai_pro_key");
-        if (savedKey) {
-            document.getElementById("licenseKey").value = savedKey;
-        }
         document.getElementById("runBtn").onclick = runAI;
     }
 });
@@ -14,62 +9,85 @@ async function runAI() {
     const licenseKey = document.getElementById("licenseKey").value;
     const resultDiv = document.getElementById("result");
 
-    if (!licenseKey) { 
-        resultDiv.className = "status-error";
-        resultDiv.innerText = "❌ Ошибка: Введите лицензионный ключ."; 
-        return; 
-    }
-    if (!prompt) { 
-        resultDiv.className = "status-error";
-        resultDiv.innerText = "❌ Ошибка: Напишите задачу."; 
-        return; 
-    }
-
-    // Сохраняем ключ
-    localStorage.setItem("ai_pro_key", licenseKey);
-    
     resultDiv.className = "status-loading";
-    resultDiv.innerText = "⏳ Сервер ИП Посаднев обрабатывает данные...";
+    resultDiv.innerText = "⏳ ИИ анализирует всю книгу...";
 
     try {
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
-            const range = sheet.getUsedRange();
-            range.load("values");
+            // 1. СОБИРАЕМ ДАННЫЕ СО ВСЕХ ЛИСТОВ
+            let sheets = context.workbook.worksheets;
+            sheets.load("items/name");
             await context.sync();
 
+            let workbookData = {};
+            for (let sheet of sheets.items) {
+                let usedRange = sheet.getUsedRange();
+                usedRange.load("values");
+                await context.sync();
+                workbookData[sheet.name] = usedRange.values;
+            }
+
+            // 2. ОТПРАВЛЯЕМ НА СЕРВЕР
             const response = await fetch("https://excel-ai-pro.ru/api/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     pin: licenseKey,
-                    prompt: prompt, 
-                    data: range.values 
+                    prompt: prompt,
+                    workbook_data: workbookData
                 })
             });
 
             const reply = await response.json();
+            if (reply.status !== "success") throw new Error(reply.message);
 
-            if (reply.status === "success") {
-                resultDiv.className = "status-success";
-                resultDiv.innerText = "✅ " + reply.message;
+            // 3. ВЫПОЛНЯЕМ КОМАНДЫ (ACTIONS)
+            resultDiv.innerText = "🚀 Выполнение команд...";
+            const plan = reply.plan;
 
-                if (reply.new_data && reply.new_data.length > 0) {
-                    const newSheetName = "Результат_" + Math.floor(Math.random() * 900 + 100);
-                    const newSheet = context.workbook.worksheets.add(newSheetName);
-                    const target = newSheet.getRange("A1").getResizedRange(reply.new_data.length - 1, reply.new_data[0].length - 1);
-                    target.values = reply.new_data;
-                    target.format.autofitColumns();
-                    newSheet.activate();
-                    await context.sync();
+            for (const action of plan.actions) {
+                let targetSheet;
+                if (action.type === "add_sheet") {
+                    targetSheet = context.workbook.worksheets.add(action.name);
+                } else {
+                    targetSheet = context.workbook.worksheets.getItem(action.sheet);
                 }
-            } else {
-                resultDiv.className = "status-error";
-                resultDiv.innerText = "⚠️ " + reply.message;
+
+                if (action.type === "set_values") {
+                    let range = targetSheet.getRange(action.range);
+                    range.values = action.values;
+                }
+
+                if (action.type === "format") {
+                    let range = targetSheet.getRange(action.range);
+                    if (action.bold) range.format.font.bold = true;
+                    if (action.color) range.format.font.color = action.color;
+                    if (action.bg) range.format.fill.color = action.bg;
+                    if (action.number_format) range.numberFormat = [[action.number_format]];
+                }
+
+                if (action.type === "formula") {
+                    let range = targetSheet.getRange(action.range);
+                    range.formulasR1C1 = [[action.formula]];
+                }
+
+                if (action.type === "chart") {
+                    let source = targetSheet.getRange(action.source);
+                    let chart = targetSheet.charts.add(action.chart_type, source, "Auto");
+                    chart.title.text = action.title;
+                }
+
+                if (action.type === "autofit") {
+                    targetSheet.getRange(action.range).format.autofitColumns();
+                }
             }
+
+            await context.sync();
+            resultDiv.className = "status-success";
+            resultDiv.innerText = "✅ " + plan.message;
         });
     } catch (e) {
         resultDiv.className = "status-error";
-        resultDiv.innerText = "❌ Ошибка Excel: " + e.message;
+        resultDiv.innerText = "❌ Ошибка: " + e.message;
     }
 }
