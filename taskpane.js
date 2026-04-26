@@ -38,7 +38,7 @@ async function runAI() {
             range.load("values");
             await context.sync();
 
-            const response = await fetch("https://rebuilt-nutmeg-breeches.ngrok-free.dev/api/analyze", {
+            const response = await fetch("https://excel-ai-pro.ru/api/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
