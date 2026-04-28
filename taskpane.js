@@ -14,10 +14,9 @@ const LICENSE_URL = "https://excel-ai-pro.ru/api/license/check";
 const STORAGE_KEYS = {
   LICENSE: "aiapro_license",
   HISTORY: "aiapro_history",
-  MODE: "aiapro_mode",
 };
 
-let CURRENT_MODE = "auto";
+const CURRENT_MODE = "auto"; // фиксированный режим (UI режимов убран)
 
 /* ---------- ВСПОМОГАТЕЛЬНОЕ ---------- */
 
@@ -66,16 +65,6 @@ function escapeHtml(s) {
   })[c]);
 }
 
-/* ---------- РЕЖИМЫ ---------- */
-
-function setMode(mode) {
-  CURRENT_MODE = mode;
-  document.querySelectorAll(".mode-chip").forEach((el) => {
-    el.classList.toggle("active", el.dataset.mode === mode);
-  });
-  localStorage.setItem(STORAGE_KEYS.MODE, mode);
-}
-
 /* ---------- ЛИЦЕНЗИЯ ---------- */
 
 async function verifyLicense() {
@@ -104,10 +93,13 @@ async function verifyLicense() {
 
 /* ---------- ИСПОЛНИТЕЛЬ ACTION PLAN ---------- */
 
-// Excel: имя листа ≤ 31 символа, нельзя : \ / ? * [ ]
+// Excel: имя листа ≤ 31 символа, нельзя : \ / ? * [ ],
+// нельзя начинать/заканчивать апострофом, "History" зарезервировано.
 function sanitizeSheetName(name) {
   if (!name) return "Результат ИИ";
   let s = String(name).replace(/[:\\\/\?\*\[\]]/g, "_").trim();
+  s = s.replace(/^'+|'+$/g, "");
+  if (s.toLowerCase() === "history") s = "История";
   if (s.length > 31) s = s.slice(0, 31);
   return s || "Лист";
 }
@@ -140,6 +132,7 @@ async function resolveSheet(context, action, createdSheets) {
     const desired = sanitizeSheetName(action.sheet_name || "Результат ИИ");
     const unique = await getUniqueSheetName(context, desired);
     const s = wb.worksheets.add(unique);
+    await context.sync(); // КРИТИЧНО: коммитим создание листа перед использованием
     createdSheets.set("_new_", s);
     action.sheet = unique;
     return s;
@@ -154,6 +147,7 @@ async function resolveSheet(context, action, createdSheets) {
     return maybe;
   }
   const created = wb.worksheets.add(safe);
+  await context.sync(); // КРИТИЧНО: коммитим создание листа
   action.sheet = safe;
   return created;
 }
@@ -208,9 +202,13 @@ async function runAction(context, a, createdSheets) {
       const maybe = context.workbook.worksheets.getItemOrNullObject(safe);
       maybe.load("isNullObject");
       await context.sync();
-      const sheet = maybe.isNullObject
-        ? context.workbook.worksheets.add(safe)
-        : maybe;
+      let sheet;
+      if (maybe.isNullObject) {
+        sheet = context.workbook.worksheets.add(safe);
+        await context.sync(); // КРИТИЧНО: коммитим, иначе tabColor/activate упадут
+      } else {
+        sheet = maybe;
+      }
       if (a.color) sheet.tabColor = a.color;
       if (a.activate !== false) sheet.activate();
       return;
@@ -593,72 +591,19 @@ async function runAI() {
   }
 }
 
-/* ---------- ПРЕСЕТЫ БЫСТРЫХ ЗАДАЧ ---------- */
-
-const PRESETS = [
-  { icon: "📊", title: "Полный анализ",
-    text: "Сделай полный анализ таблицы: выведи на новый лист сводку по ключевым метрикам, топ-5 строк по основным показателям, итоги по группам и построй 2-3 подходящие диаграммы.",
-    mode: "analyze" },
-  { icon: "🎨", title: "Зебра + заголовки",
-    text: "Сделай красивое оформление таблицы: цветную шапку, чередующиеся строки (зебра), границы, автоширину столбцов, закрепи верхнюю строку.",
-    mode: "format" },
-  { icon: "🔥", title: "Тепловая карта",
-    text: "Примени условное форматирование (color scale) ко всем числовым столбцам — от зелёного к красному.",
-    mode: "format" },
-  { icon: "Σ", title: "Добавить итоги",
-    text: "Добавь строку 'Итого' внизу с формулами SUM по числовым столбцам и пометь её жирным.",
-    mode: "formula" },
-  { icon: "📈", title: "Диаграмма по столбцам",
-    text: "Построй подходящую диаграмму на основе данных и помести её рядом с таблицей.",
-    mode: "chart" },
-  { icon: "🧹", title: "Очистка",
-    text: "Удали пустые строки, обрежь лишние пробелы в ячейках, приведи заголовки к единому стилю Title Case.",
-    mode: "transform" },
-  { icon: "💲", title: "Наценка 15%",
-    text: "Найди столбец с ценой и добавь рядом столбец 'Цена с наценкой 15%' с формулой.",
-    mode: "formula" },
-  { icon: "🔍", title: "Дубли",
-    text: "Подсветь красным дубликаты в первом столбце и выведи на новом листе список уникальных значений с количеством повторов.",
-    mode: "format" },
-];
-
-function renderPresets() {
-  const wrap = $("presets");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-  PRESETS.forEach((p) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "preset";
-    b.innerHTML = `<span>${p.icon}</span> ${p.title}`;
-    b.onclick = () => {
-      $("promptInput").value = p.text;
-      setMode(p.mode);
-      $("promptInput").focus();
-    };
-    wrap.appendChild(b);
-  });
-}
-
 /* ---------- ИНИЦИАЛИЗАЦИЯ ---------- */
 
 Office.onReady((info) => {
   if (info.host !== Office.HostType.Excel) return;
 
-  // Восстанавливаем сохранённые значения
+  // Восстанавливаем сохранённый ключ
   const savedPin = localStorage.getItem(STORAGE_KEYS.LICENSE);
   if (savedPin) $("licenseKey").value = savedPin;
 
-  const savedMode = localStorage.getItem(STORAGE_KEYS.MODE) || "auto";
-  setMode(savedMode);
-
   // Биндинги
   $("runBtn").onclick = runAI;
-  const verifyBtn = $("verifyBtn"); if (verifyBtn) verifyBtn.onclick = verifyLicense;
-
-  document.querySelectorAll(".mode-chip").forEach((el) => {
-    el.onclick = () => setMode(el.dataset.mode);
-  });
+  const verifyBtn = $("verifyBtn");
+  if (verifyBtn) verifyBtn.onclick = verifyLicense;
 
   const clearBtn = $("clearHistoryBtn");
   if (clearBtn) clearBtn.onclick = () => {
@@ -671,6 +616,5 @@ Office.onReady((info) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runAI();
   });
 
-  renderPresets();
   renderHistory();
 });
