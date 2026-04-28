@@ -104,33 +104,58 @@ async function verifyLicense() {
 
 /* ---------- ИСПОЛНИТЕЛЬ ACTION PLAN ---------- */
 
-function resolveSheet(context, action, createdSheets) {
-  // sheet может быть: "_active_", "_new_", или "Имя листа"
-  const wb = context.workbook;
-  const name = action.sheet || "_active_";
+// Excel: имя листа ≤ 31 символа, нельзя : \ / ? * [ ]
+function sanitizeSheetName(name) {
+  if (!name) return "Результат ИИ";
+  let s = String(name).replace(/[:\\\/\?\*\[\]]/g, "_").trim();
+  if (s.length > 31) s = s.slice(0, 31);
+  return s || "Лист";
+}
 
-  if (name === "_active_") {
+async function getUniqueSheetName(context, base) {
+  const sheets = context.workbook.worksheets;
+  sheets.load("items/name");
+  await context.sync();
+  const existing = new Set(sheets.items.map((s) => s.name));
+  let cand = sanitizeSheetName(base);
+  if (!existing.has(cand)) return cand;
+  for (let i = 2; i < 1000; i++) {
+    cand = sanitizeSheetName(`${base} ${i}`);
+    if (!existing.has(cand)) return cand;
+  }
+  return sanitizeSheetName(`${base} ${Date.now()}`);
+}
+
+// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: используем getItemOrNullObject + load + sync,
+// иначе Office.js падает с "Запрошенный ресурс не существует" на следующем sync.
+async function resolveSheet(context, action, createdSheets) {
+  const wb = context.workbook;
+  const rawName = action.sheet || "_active_";
+
+  if (rawName === "_active_") {
     return wb.worksheets.getActiveWorksheet();
   }
-  if (name === "_new_") {
-    const desired = action.sheet_name || `Результат ИИ`;
-    const unique = uniqueSheetName(context, desired);
+
+  if (rawName === "_new_") {
+    const desired = sanitizeSheetName(action.sheet_name || "Результат ИИ");
+    const unique = await getUniqueSheetName(context, desired);
     const s = wb.worksheets.add(unique);
-    createdSheets.set(name, s);
+    createdSheets.set("_new_", s);
     action.sheet = unique;
     return s;
   }
-  // Существующий лист или новый по имени
-  let s;
-  try { s = wb.worksheets.getItem(name); }
-  catch (_) { s = wb.worksheets.add(name); }
-  return s;
-}
 
-function uniqueSheetName(context, base) {
-  // Office.js не даёт синхронно проверить — добавим суффикс времени, если потребуется
-  const stamp = new Date().toLocaleTimeString("ru-RU").replace(/[: ]/g, "");
-  return `${base} ${stamp}`.slice(0, 30);
+  const safe = sanitizeSheetName(rawName);
+  const maybe = wb.worksheets.getItemOrNullObject(safe);
+  maybe.load("isNullObject,name");
+  await context.sync();
+  if (!maybe.isNullObject) {
+    action.sheet = maybe.name;
+    return maybe;
+  }
+  const created = wb.worksheets.add(safe);
+  action.sheet = safe;
+  return created;
 }
 
 function colLetter(n) {
@@ -141,14 +166,36 @@ function colLetter(n) {
 
 async function executePlan(context, actions) {
   const createdSheets = new Map();
-  for (let i = 0; i < actions.length; i++) {
-    const a = actions[i];
-    try {
-      await runAction(context, a, createdSheets);
-      await context.sync();
-    } catch (e) {
-      console.error("Ошибка действия", a, e);
-      throw new Error(`Действие #${i + 1} (${a.type}): ${e.message}`);
+
+  // На время большого плана отключаем автопересчёт формул (5-10× быстрее)
+  let prevCalcMode = null;
+  try {
+    context.application.load("calculationMode");
+    await context.sync();
+    prevCalcMode = context.application.calculationMode;
+    context.application.calculationMode = "Manual";
+    await context.sync();
+  } catch (_) { /* старые версии Excel могут не поддерживать */ }
+
+  try {
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      try {
+        await runAction(context, a, createdSheets);
+        await context.sync();
+      } catch (e) {
+        console.error("Ошибка действия", a, e);
+        throw new Error(`Действие #${i + 1} (${a.type}): ${e.message}`);
+      }
+    }
+  } finally {
+    // Возвращаем автопересчёт
+    if (prevCalcMode) {
+      try {
+        context.application.calculationMode = prevCalcMode;
+        context.application.calculate("Full");
+        await context.sync();
+      } catch (_) {}
     }
   }
 }
@@ -157,48 +204,85 @@ async function runAction(context, a, createdSheets) {
   switch (a.type) {
 
     case "create_sheet": {
-      let sheet;
-      try { sheet = context.workbook.worksheets.getItem(a.name); }
-      catch { sheet = context.workbook.worksheets.add(a.name); }
+      const safe = sanitizeSheetName(a.name);
+      const maybe = context.workbook.worksheets.getItemOrNullObject(safe);
+      maybe.load("isNullObject");
+      await context.sync();
+      const sheet = maybe.isNullObject
+        ? context.workbook.worksheets.add(safe)
+        : maybe;
       if (a.color) sheet.tabColor = a.color;
       if (a.activate !== false) sheet.activate();
       return;
     }
 
     case "rename_sheet": {
-      const s = context.workbook.worksheets.getItem(a.old_name);
-      s.name = a.new_name; return;
+      const maybe = context.workbook.worksheets.getItemOrNullObject(a.old_name);
+      maybe.load("isNullObject");
+      await context.sync();
+      if (!maybe.isNullObject) maybe.name = sanitizeSheetName(a.new_name);
+      return;
     }
 
     case "delete_sheet": {
-      try { context.workbook.worksheets.getItem(a.name).delete(); } catch {}
+      const maybe = context.workbook.worksheets.getItemOrNullObject(a.name);
+      maybe.load("isNullObject");
+      await context.sync();
+      if (!maybe.isNullObject) maybe.delete();
       return;
     }
 
     case "activate_sheet": {
-      context.workbook.worksheets.getItem(a.name).activate(); return;
+      const maybe = context.workbook.worksheets.getItemOrNullObject(a.name);
+      maybe.load("isNullObject");
+      await context.sync();
+      if (!maybe.isNullObject) maybe.activate();
+      return;
     }
 
     case "set_values": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const values = a.values || [];
       if (!values.length) return;
-      const rows = values.length;
       const cols = values[0].length;
       const startCell = a.start_cell || "A1";
-      const range = sheet.getRange(startCell).getResizedRange(rows - 1, cols - 1);
-      range.values = values;
+
+      // Получаем индексы стартовой ячейки
+      const start = sheet.getRange(startCell);
+      start.load("rowIndex,columnIndex");
+      await context.sync();
+
+      // Запись чанками для больших объёмов (5000+ строк)
+      const CHUNK = values.length > 1000 ? 500 : values.length;
+      for (let i = 0; i < values.length; i += CHUNK) {
+        const chunk = values.slice(i, i + CHUNK);
+        const range = sheet.getRangeByIndexes(
+          start.rowIndex + i,
+          start.columnIndex,
+          chunk.length,
+          cols
+        );
+        range.values = chunk;
+        if (CHUNK < values.length) {
+          // Промежуточный sync для стабильности и прогресса
+          await context.sync();
+          if (typeof setStatus === "function") {
+            const done = Math.min(i + CHUNK, values.length);
+            setStatus("status-loading", `🛠 Запись ${done}/${values.length} строк...`);
+          }
+        }
+      }
       return;
     }
 
     case "set_formula": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(a.cell).formulas = [[a.formula]];
       return;
     }
 
     case "fill_formula": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const range = sheet.getRange(a.range);
       range.load("rowCount,columnCount");
       await context.sync();
@@ -213,7 +297,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "format": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       const f = r.format;
       if (a.fill_color) f.fill.color = a.fill_color;
@@ -231,7 +315,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "borders": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       const edges = a.edges || ["EdgeTop","EdgeBottom","EdgeLeft","EdgeRight","InsideHorizontal","InsideVertical"];
       edges.forEach((edge) => {
@@ -244,7 +328,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "autofit": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const ur = sheet.getUsedRange();
       if (a.mode === "rows") ur.format.autofitRows();
       else if (a.mode === "both") { ur.format.autofitColumns(); ur.format.autofitRows(); }
@@ -253,12 +337,12 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "merge_cells": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(a.range).merge(!!a.across); return;
     }
 
     case "freeze_panes": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.freezePanes.unfreeze();
       if (a.rows && !a.columns) sheet.freezePanes.freezeRows(a.rows);
       else if (!a.rows && a.columns) sheet.freezePanes.freezeColumns(a.columns);
@@ -270,7 +354,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "conditional_format": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       switch (a.rule) {
         case "color_scale": {
@@ -317,7 +401,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "create_chart": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const dataRange = sheet.getRange(a.data_range);
       const chart = sheet.charts.add(
         a.chart_type || "ColumnClustered",
@@ -340,7 +424,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "sort": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       r.sort.apply(
         [{ key: (a.key_column || 1) - 1, ascending: a.ascending !== false }],
@@ -350,7 +434,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "insert_columns": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const col = a.before_column;
       const count = a.count || 1;
       const range = sheet.getRange(`${col}1:${col}1`).getEntireColumn();
@@ -359,7 +443,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "insert_rows": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       for (let i = 0; i < (a.count || 1); i++) {
         sheet.getRange(`${a.before_row}:${a.before_row}`).insert("Down");
       }
@@ -367,17 +451,17 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "delete_columns": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(a.range).getEntireColumn().delete("Left"); return;
     }
 
     case "delete_rows": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(a.range).getEntireRow().delete("Up"); return;
     }
 
     case "data_validation": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       const v = r.dataValidation;
       if (a.rule === "list") {
@@ -394,7 +478,7 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "protect_sheet": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.protection.protect({}, a.password || ""); return;
     }
 
@@ -409,14 +493,14 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "hyperlink": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const cell = sheet.getRange(a.cell);
       cell.hyperlink = { address: a.url, textToDisplay: a.display || a.url };
       return;
     }
 
     case "clear": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       const r = sheet.getRange(a.range);
       if (a.contents && a.formats) r.clear("All");
       else if (a.formats) r.clear("Formats");
@@ -425,12 +509,12 @@ async function runAction(context, a, createdSheets) {
     }
 
     case "row_height": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(`${a.row}:${a.row}`).format.rowHeight = a.height; return;
     }
 
     case "column_width": {
-      const sheet = resolveSheet(context, a, createdSheets);
+      const sheet = await resolveSheet(context, a, createdSheets);
       sheet.getRange(`${a.column}:${a.column}`).format.columnWidth = a.width; return;
     }
 
