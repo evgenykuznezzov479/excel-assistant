@@ -86,31 +86,6 @@
 
     .full { width: 100%; margin-top: 10px; }
 
-    /* ---------- MODES ---------- */
-    .modes { display: flex; flex-wrap: wrap; gap: 6px; }
-    .mode-chip {
-      background: #eef1fb; color: var(--text);
-      padding: 6px 10px; border-radius: 999px; font-size: 11px;
-      cursor: pointer; border: 1px solid transparent; user-select: none;
-      transition: all .15s;
-    }
-    .mode-chip:hover { background: #dfe5fa; }
-    .mode-chip.active {
-      background: var(--primary); color: white; border-color: var(--primary);
-    }
-
-    /* ---------- PRESETS ---------- */
-    .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .preset {
-      background: #f3f5fc; color: var(--text);
-      padding: 8px 10px; border-radius: 8px; font-size: 11px; font-weight: 600;
-      text-align: left; cursor: pointer; border: 1px solid var(--border);
-      display: flex; align-items: center; gap: 6px;
-      transition: background .15s, border-color .15s;
-    }
-    .preset:hover { background: #eaefff; border-color: var(--primary); }
-    .preset span { font-size: 14px; }
-
     /* ---------- HISTORY ---------- */
     .history-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
     .history-item {
@@ -161,26 +136,6 @@
       <input type="text" id="licenseKey" placeholder="Введите ключ (например, BOSS-0000)">
       <button class="secondary" id="verifyBtn" style="flex:0 0 auto;">Проверить</button>
     </div>
-  </div>
-
-  <!-- РЕЖИМ -->
-  <div class="card">
-    <div class="card-title">🎯 Режим работы</div>
-    <div class="modes">
-      <div class="mode-chip active" data-mode="auto">⚡ Авто</div>
-      <div class="mode-chip" data-mode="transform">🔄 Преобразование</div>
-      <div class="mode-chip" data-mode="analyze">📊 Анализ</div>
-      <div class="mode-chip" data-mode="format">🎨 Оформление</div>
-      <div class="mode-chip" data-mode="chart">📈 Диаграмма</div>
-      <div class="mode-chip" data-mode="formula">Σ Формулы</div>
-      <div class="mode-chip" data-mode="macro">🛠 Макро</div>
-    </div>
-  </div>
-
-  <!-- БЫСТРЫЕ ПРЕСЕТЫ -->
-  <div class="card">
-    <div class="card-title">⚡ Быстрые задачи</div>
-    <div class="presets" id="presets"></div>
   </div>
 
   <!-- ОСНОВНОЙ ВВОД -->
