@@ -80,9 +80,15 @@ async function verifyLicense() {
     const j = await res.json();
     if (j.valid) {
       localStorage.setItem(STORAGE_KEYS.LICENSE, pin);
-      setStatus("status-success",
-        `✅ ${j.name} | Тариф: ${j.tier} | ` +
-        (j.limit_per_day ? `Использовано сегодня: ${j.used_today}/${j.limit_per_day}` : "Без лимита"));
+      const parts = [`✅ ${j.name}`];
+      if (j.limit_total) {
+        parts.push(`осталось ${j.remaining_total} из ${j.limit_total}`);
+      } else if (j.limit_per_day) {
+        parts.push(`сегодня ${j.used_today}/${j.limit_per_day}`);
+      } else {
+        parts.push("без лимита");
+      }
+      setStatus("status-success", parts.join(" · "));
     } else {
       setStatus("status-error", "⚠️ " + (j.message || "Лицензия не найдена."));
     }
